@@ -1,152 +1,166 @@
 # solution_q2.py
-# Question 2: Uniform Cost Search with non-uniform action costs
+# DS 442 - Question 2: Uniform Cost Search for the River Crossing Puzzle
 #
-# Run with: python solution_q2.py           (runs both cost models)
-#           python solution_q2.py A         (runs only cost model A)
-#           python solution_q2.py B         (runs only cost model B)
+# Run with:
+#   python solution_q2.py        -> runs both cost models (A then B)
+#   python solution_q2.py A      -> cost model A only
+#   python solution_q2.py B      -> cost model B only
 #
-# You can also pick the model by putting a second line in input.txt:
-#     3, 3, 0, 0, L
-#     A
+# How we set this up which follows the Uninformed Search and Graph Search slides:
+#   - Same search problem as Q1, but get_successors now returns the real
+#     step cost of each action based on the chosen cost model.
+#   - UCS is the same GRAPH-SEARCH as Q1. The only difference is the fringe:
+#     UCS uses a priority queue ordered by cumulative path cost g(n).
+#   - The closed set is a Python set so no state gets expanded twice.
+#   - The goal test happens when a node is removed from the fringe, not
+#     when it's added. This matters for UCS: a goal can be added with a
+#     high cost and a cheaper path to it might still show up later.
+#   - A node expansion is counted every time a state gets added to the
+#     closed set and its successors are generated.
 #
-# Cost Model A: 2 per missionary in the boat, 1 per cannibal.
-# Cost Model B: going left to right costs 2, coming back costs 1.
-#
-# UCS orders the fringe by g(n), the cost so far, like in lecture.
+# Cost models:
+#   A: 2 per missionary + 1 per cannibal on the boat
+#   B: left -> right trip costs 2, right -> left trip costs 1
 
-import heapq
 import sys
+import heapq
 
-# All the ways the boat can be loaded: (missionaries, cannibals)
+# All the ways the boat can be loaded: (missionaries, cannibals).
 # The boat holds 1 or 2 people.
 MOVES = [(0, 1), (0, 2), (1, 0), (1, 1), (2, 0)]
 
 
-def is_safe(state):
-    # A state is safe if nobody is negative and cannibals never outnumber
-    # missionaries on a bank that has missionaries on it.
-    m_left, c_left, m_right, c_right, boat = state
+class RiverCrossingProblem:
+    # State = (M_left, C_left, M_right, C_right, Boat)
 
-    if m_left < 0 or c_left < 0 or m_right < 0 or c_right < 0:
-        return False
-    if m_left > 0 and c_left > m_left:
-        return False
-    if m_right > 0 and c_right > m_right:
-        return False
-    return True
+    def __init__(self, start_state, cost_model):
+        self.start_state = start_state
+        self.cost_model = cost_model
 
+    def get_start_state(self):
+        return self.start_state
 
-def get_successors(state):
-    # Returns a list of (move, new_state) for every legal move from this state.
-    m_left, c_left, m_right, c_right, boat = state
-    successors = []
+    def is_goal_state(self, state):
+        # Everyone is on the right bank
+        return state[0] == 0 and state[1] == 0
 
-    for move in MOVES:
+    def is_valid(self, state):
+        m_left, c_left, m_right, c_right, boat = state
+
+        # nobody can be negative
+        if m_left < 0 or c_left < 0 or m_right < 0 or c_right < 0:
+            return False
+        # check BOTH banks, not just the one the boat left
+        if m_left > 0 and c_left > m_left:
+            return False
+        if m_right > 0 and c_right > m_right:
+            return False
+        return True
+
+    def step_cost(self, move, boat):
         m, c = move
-
-        if boat == 'L':
-            # Boat goes left to right, so those people leave the left bank.
-            if m > m_left or c > c_left:
-                continue
-            new_state = (m_left - m, c_left - c, m_right + m, c_right + c, 'R')
+        if self.cost_model == 'A':
+            # missionaries are twice as costly to carry as cannibals
+            return 2 * m + 1 * c
         else:
-            # Boat goes right to left.
-            if m > m_right or c > c_right:
-                continue
-            new_state = (m_left + m, c_left + c, m_right - m, c_right - c, 'L')
+            # cost model B: against the current (L -> R) is harder
+            if boat == 'L':
+                return 2
+            else:
+                return 1
 
-        if is_safe(new_state):
-            successors.append((move, new_state))
+    def get_successors(self, state):
+        # returns a list of (next_state, action, step_cost)
+        m_left, c_left, m_right, c_right, boat = state
+        successors = []
 
-    return successors
+        for m, c in MOVES:
+            if boat == 'L':
+                # boat goes left -> right
+                next_state = (m_left - m, c_left - c, m_right + m, c_right + c, 'R')
+            else:
+                # boat goes right -> left
+                next_state = (m_left + m, c_left + c, m_right - m, c_right - c, 'L')
 
+            if self.is_valid(next_state):
+                successors.append((next_state, (m, c), self.step_cost((m, c), boat)))
 
-def is_goal(state):
-    # Everyone made it to the right bank.
-    return state[0] == 0 and state[1] == 0
-
-
-def get_cost(move, state, model):
-    # How much this move costs, depending on which cost model we're using.
-    if model == 'A':
-        # Pay by who is in the boat.
-        m, c = move
-        return 2 * m + 1 * c
-    else:
-        # Pay by direction. The boat is still on the old side here,
-        # so boat == 'L' means we are about to go left to right.
-        if state[4] == 'L':
-            return 2
-        else:
-            return 1
+        return successors
 
 
-def ucs(start, model):
-    # Fringe holds (g, order, state, path). heapq always pops the smallest g.
-    # The order number is just a counter so that when two nodes tie on g,
-    # whichever went in first comes out first. Without it Python would
-    # compare the states themselves, which picks ties in a weird order.
-    fringe = []
-    order = 0
-    heapq.heappush(fringe, (0, order, start, [start]))
+# Fringe data structure
 
+class PriorityQueue:
+    # Pops the item with the lowest priority (cheapest path cost) first.
+    # The counter breaks ties so equal-cost nodes come out in the order
+    # they were added.
+    def __init__(self):
+        self.heap = []
+        self.count = 0
+
+    def push(self, item, priority):
+        heapq.heappush(self.heap, (priority, self.count, item))
+        self.count += 1
+
+    def pop(self):
+        priority, count, item = heapq.heappop(self.heap)
+        return item
+
+    def is_empty(self):
+        return len(self.heap) == 0
+
+
+# Search
+
+def uniform_cost_search(problem):
+    # GRAPH-SEARCH from the slides, with a priority queue as the fringe:
+    #   closed <- empty set
+    #   put start node in fringe
+    #   loop: pop cheapest node, goal test, if state not in closed -> add to closed and expand
+    #
+    # Each node on the fringe is (state, path of states, total cost g)
     closed = set()
     expansions = 0
+    fringe = PriorityQueue()
 
-    while len(fringe) > 0:
-        g, count, state, path = heapq.heappop(fringe)
+    start = problem.get_start_state()
+    fringe.push((start, [start], 0), 0)
 
-        # Skip it if we already expanded this state.
-        if state in closed:
-            continue
-        closed.add(state)
+    while True:
+        if fringe.is_empty():
+            return None, None, expansions    # failure
 
-        # Stop when we DEQUEUE the goal, not when we enqueue it.
-        if is_goal(state):
-            return path, g, expansions
+        state, path, cost = fringe.pop()
 
-        expansions = expansions + 1
+        if problem.is_goal_state(state):
+            return path, cost, expansions
 
-        for move, new_state in get_successors(state):
-            if new_state not in closed:
-                new_g = g + get_cost(move, state, model)
-                order = order + 1
-                heapq.heappush(fringe, (new_g, order, new_state, path + [new_state]))
+        if state not in closed:
+            closed.add(state)
+            expansions += 1
 
-    return None, 0, expansions
+            for next_state, action, step_cost in problem.get_successors(state):
+                new_cost = cost + step_cost
+                fringe.push((next_state, path + [next_state], new_cost), new_cost)
 
 
-def read_input():
-    # First line is the start state. An optional second line is the cost model.
-    f = open("input.txt")
-    lines = f.readlines()
+# Input / Output
+
+def read_start_state(filename):
+    # input.txt looks like: 3, 3, 0, 0, L
+    f = open(filename)
+    line = f.readline().strip()
     f.close()
 
-    parts = lines[0].strip().split(",")
-    m_left = int(parts[0])
-    c_left = int(parts[1])
-    m_right = int(parts[2])
-    c_right = int(parts[3])
-    boat = parts[4].strip().upper()
-    start = (m_left, c_left, m_right, c_right, boat)
-
-    model = None
-    if len(lines) > 1:
-        second = lines[1].strip().upper()
-        if second == 'A' or second == 'B':
-            model = second
-
-    return start, model
+    parts = [p.strip() for p in line.split(",")]
+    return (int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3]), parts[4].upper())
 
 
 def path_to_string(path):
-    pieces = []
-    for state in path:
-        pieces.append("(%d,%d,%d,%d,%s)" % state)
-    return " -> ".join(pieces)
+    return " -> ".join("(%d,%d,%d,%d,%s)" % s for s in path)
 
 
-def print_answer(name, path, cost, expansions):
+def print_solution(name, path, cost, expansions):
     print("The solution of " + name + " is:")
     if path is None:
         print("Solution Path: no solution found")
@@ -158,26 +172,25 @@ def print_answer(name, path, cost, expansions):
 
 
 def main():
-    start, file_model = read_input()
+    start = read_start_state("input.txt")
 
-    # A model given on the command line beats the one in input.txt.
-    model = file_model
+    # pick the cost model from the command line, otherwise run both
     if len(sys.argv) > 1:
-        model = sys.argv[1].strip().upper()
-
-    if model == 'A' or model == 'B':
-        models = [model]
+        models = [sys.argv[1].upper()]
+        if models[0] not in ('A', 'B'):
+            print("Cost model must be A or B")
+            return
     else:
         models = ['A', 'B']
 
-    first = True
-    for m in models:
-        if not first:
+    for i in range(len(models)):
+        model = models[i]
+        problem = RiverCrossingProblem(start, model)
+        path, cost, expansions = uniform_cost_search(problem)
+        print_solution("Q2.1 (UCS, cost model " + model + ")", path, cost, expansions)
+        if i < len(models) - 1:
             print()
-        first = False
-
-        path, cost, expansions = ucs(start, m)
-        print_answer("Q2.1 (UCS, cost model " + m + ")", path, cost, expansions)
 
 
-main()
+if __name__ == "__main__":
+    main()
