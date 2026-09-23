@@ -1,141 +1,169 @@
 # solution_q1.py
-# Question 1: DFS and BFS for the River Crossing Puzzle
+# DS 442 - Question 1: DFS and BFS for the River Crossing Puzzle
 # Run with: python solution_q1.py
 #
-# Cost here is just the number of actions, since every move counts the same.
-# Both searches are graph searches, so a state never gets expanded twice.
-# I count an expansion every time I pop a node and generate its children.
-# The goal node doesn't count, because the search stops before expanding it.
+# How we set this up which follows the Uninformed Search and Graph Search lecture slides:
+#   - The puzzle is written as a search problem: start state, goal test,
+#     and a successor function that returns (next state, action, cost).
+#   - DFS and BFS use the exact same GRAPH-SEARCH function. The only
+#     difference is the fringe: DFS uses a LIFO stack, BFS uses a FIFO queue.
+#   - GRAPH-SEARCH keeps a closed set (a Python set, not a list) so the
+#     same state is never expanded twice.
+#   - The goal test happens when a node is removed from the fringe,
+#     not when it is added.
+#   - A node expansion is counted every time a state gets added to the
+#     closed set and its successors are generated. The goal node isn't
+#     counted since the search returns before expanding it.
+#   - Every action costs 1, so total cost = number of boat trips.
 
 from collections import deque
 
-# All the ways the boat can be loaded: (missionaries, cannibals)
+# All the ways the boat can be loaded: (missionaries, cannibals).
 # The boat holds 1 or 2 people.
 MOVES = [(0, 1), (0, 2), (1, 0), (1, 1), (2, 0)]
 
 
-def is_safe(state):
-    # A state is safe if nobody is negative and cannibals never outnumber
-    # missionaries on a bank that has missionaries on it.
-    m_left, c_left, m_right, c_right, boat = state
+class RiverCrossingProblem:
+    # State = (M_left, C_left, M_right, C_right, Boat)
 
-    if m_left < 0 or c_left < 0 or m_right < 0 or c_right < 0:
-        return False
-    if m_left > 0 and c_left > m_left:
-        return False
-    if m_right > 0 and c_right > m_right:
-        return False
-    return True
+    def __init__(self, start_state):
+        self.start_state = start_state
+
+    def get_start_state(self):
+        return self.start_state
+
+    def is_goal_state(self, state):
+        # Everyone is on the right bank
+        return state[0] == 0 and state[1] == 0
+
+    def is_valid(self, state):
+        m_left, c_left, m_right, c_right, boat = state
+
+        # nobody can be negative
+        if m_left < 0 or c_left < 0 or m_right < 0 or c_right < 0:
+            return False
+        # check BOTH banks, not just the one the boat left
+        if m_left > 0 and c_left > m_left:
+            return False
+        if m_right > 0 and c_right > m_right:
+            return False
+        return True
+
+    def get_successors(self, state):
+        # returns a list of (next_state, action, step_cost)
+        m_left, c_left, m_right, c_right, boat = state
+        successors = []
+
+        for m, c in MOVES:
+            if boat == 'L':
+                # boat goes left -> right
+                next_state = (m_left - m, c_left - c, m_right + m, c_right + c, 'R')
+            else:
+                # boat goes right -> left
+                next_state = (m_left + m, c_left + c, m_right - m, c_right - c, 'L')
+
+            if self.is_valid(next_state):
+                successors.append((next_state, (m, c), 1))
+
+        return successors
 
 
-def get_successors(state):
-    # Returns a list of new states we can reach from this one.
-    m_left, c_left, m_right, c_right, boat = state
-    successors = []
+# Fringe data structures 
 
-    for move in MOVES:
-        m, c = move
+class Stack:
+    # LIFO: last thing pushed is the first thing popped which is used for DFS
+    def __init__(self):
+        self.items = []
 
-        if boat == 'L':
-            # Boat goes left to right, so those people leave the left bank.
-            if m > m_left or c > c_left:
-                continue
-            new_state = (m_left - m, c_left - c, m_right + m, c_right + c, 'R')
-        else:
-            # Boat goes right to left.
-            if m > m_right or c > c_right:
-                continue
-            new_state = (m_left + m, c_left + c, m_right - m, c_right - c, 'L')
+    def push(self, item):
+        self.items.append(item)
 
-        if is_safe(new_state):
-            successors.append(new_state)
+    def pop(self):
+        return self.items.pop()
 
-    return successors
+    def is_empty(self):
+        return len(self.items) == 0
 
 
-def is_goal(state):
-    # Everyone made it to the right bank.
-    return state[0] == 0 and state[1] == 0
+class Queue:
+    # FIFO: first thing pushed is the first thing popped which is used for BFS
+    def __init__(self):
+        self.items = deque()
+
+    def push(self, item):
+        self.items.append(item)
+
+    def pop(self):
+        return self.items.popleft()
+
+    def is_empty(self):
+        return len(self.items) == 0
 
 
-def dfs(start):
-    # DFS uses a stack, so we always work on the most recent node first.
-    stack = [(start, [start])]
-    visited = set()
+# Search
+
+def graph_search(problem, fringe, reverse_successors=False):
+    # GRAPH-SEARCH:
+    #   closed <- empty set
+    #   put start node in fringe
+    #   loop: pop node, goal test, if state not in closed -> add to closed and expand
+    #
+    # Each node on the fringe is (state, path of states, total cost)
+    closed = set()
     expansions = 0
 
-    while len(stack) > 0:
-        state, path = stack.pop()
+    start = problem.get_start_state()
+    fringe.push((start, [start], 0))
 
-        if state in visited:
-            continue
-        visited.add(state)
+    while True:
+        if fringe.is_empty():
+            return None, None, expansions    # = failure
 
-        if is_goal(state):
-            return path, len(path) - 1, expansions
+        state, path, cost = fringe.pop()
 
-        expansions = expansions + 1
+        if problem.is_goal_state(state):
+            return path, cost, expansions
 
-        # Reversed so the first successor ends up on top of the stack
-        # and gets popped first.
-        successors = get_successors(state)
-        successors.reverse()
-        for new_state in successors:
-            if new_state not in visited:
-                stack.append((new_state, path + [new_state]))
+        if state not in closed:
+            closed.add(state)
+            expansions += 1
 
-    return None, 0, expansions
+            successors = problem.get_successors(state)
+            if reverse_successors:
+                # For the stack, push in reverse so the first move in MOVES
+                # ends up on top and is explored first (left-to-right like
+                # the DFS example in lecture)
+                successors.reverse()
 
-
-def bfs(start):
-    # BFS uses a queue, so we finish every node at one depth before
-    # moving down to the next one.
-    queue = deque()
-    queue.append((start, [start]))
-    seen = set()
-    seen.add(start)
-    expansions = 0
-
-    while len(queue) > 0:
-        state, path = queue.popleft()
-
-        if is_goal(state):
-            return path, len(path) - 1, expansions
-
-        expansions = expansions + 1
-
-        for new_state in get_successors(state):
-            if new_state not in seen:
-                seen.add(new_state)
-                queue.append((new_state, path + [new_state]))
-
-    return None, 0, expansions
+            for next_state, action, step_cost in successors:
+                fringe.push((next_state, path + [next_state], cost + step_cost))
 
 
-def read_start_state():
+def depth_first_search(problem):
+    return graph_search(problem, Stack(), reverse_successors=True)
+
+
+def breadth_first_search(problem):
+    return graph_search(problem, Queue())
+
+
+# Input / Output
+
+def read_start_state(filename):
     # input.txt looks like: 3, 3, 0, 0, L
-    f = open("input.txt")
+    f = open(filename)
     line = f.readline().strip()
     f.close()
 
-    parts = line.split(",")
-    m_left = int(parts[0])
-    c_left = int(parts[1])
-    m_right = int(parts[2])
-    c_right = int(parts[3])
-    boat = parts[4].strip().upper()
-
-    return (m_left, c_left, m_right, c_right, boat)
+    parts = [p.strip() for p in line.split(",")]
+    return (int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3]), parts[4].upper())
 
 
 def path_to_string(path):
-    pieces = []
-    for state in path:
-        pieces.append("(%d,%d,%d,%d,%s)" % state)
-    return " -> ".join(pieces)
+    return " -> ".join("(%d,%d,%d,%d,%s)" % s for s in path)
 
 
-def print_answer(name, path, cost, expansions):
+def print_solution(name, path, cost, expansions):
     print("The solution of " + name + " is:")
     if path is None:
         print("Solution Path: no solution found")
@@ -147,14 +175,15 @@ def print_answer(name, path, cost, expansions):
 
 
 def main():
-    start = read_start_state()
+    problem = RiverCrossingProblem(read_start_state("input.txt"))
 
-    path, cost, expansions = dfs(start)
-    print_answer("Q1.1.a (DFS)", path, cost, expansions)
+    path, cost, expansions = depth_first_search(problem)
+    print_solution("Q1.1.a (DFS)", path, cost, expansions)
     print()
 
-    path, cost, expansions = bfs(start)
-    print_answer("Q1.1.b (BFS)", path, cost, expansions)
+    path, cost, expansions = breadth_first_search(problem)
+    print_solution("Q1.1.b (BFS)", path, cost, expansions)
 
 
-main()
+if __name__ == "__main__":
+    main()
