@@ -1,174 +1,190 @@
-"""
-solution_q3.py  --  Question 3: A* search with admissible heuristics
-
-Run with:  python solution_q3.py
-
-Uses Cost Model A throughout:  cost = 2 per missionary aboard + 1 per cannibal.
-
-HEURISTICS
-  h1  Passenger Weight Remaining
-          h1(s) = 2 * M_left + 1 * C_left
-
-  h2  Trip-Packing Lower Bound
-          h2(s) = ceil( (2 * M_left + 1 * C_left) / 3 )
-
-  h3  Weight-Plus-Return-Trips  (my own; Q3.2 Part C)
-          Let W = 2 * M_left + C_left     (weight still to be ferried over)
-              P = M_left + C_left         (people still on the left bank)
-              B = return trips still required:
-                      max(0, ceil(P/2) - 1)  if the boat is on the left
-                      ceil(P/2)              if the boat is on the right
-          h3(s) = 0            if P == 0
-          h3(s) = W + 2 * B    otherwise
-
-      Idea: h1 only charges for carrying the left-bank people across once,
-      but the boat cannot come back by itself -- every return trip needs a
-      rower, who costs at least 1 to bring back and at least 1 to ferry over
-      again.  h3 adds that unavoidable shuttling cost, so h3 >= h1 >= h2.
-"""
+# solution_q3.py
+# Question 3: A* Search with admissible heuristics
+# Run with: python solution_q3.py
+#
+# Uses Cost Model A: each missionary in the boat costs 2, each cannibal costs 1.
+# A* orders the fringe by f(n) = g(n) + h(n), like in lecture.
 
 import heapq
 import math
 
+# All the ways the boat can be loaded: (missionaries, cannibals)
+# The boat holds 1 or 2 people.
 MOVES = [(0, 1), (0, 2), (1, 0), (1, 1), (2, 0)]
 
 
-def is_valid(state):
-    m_l, c_l, m_r, c_r, _ = state
-    if min(m_l, c_l, m_r, c_r) < 0:
+def is_safe(state):
+    # A state is safe if nobody is negative and cannibals never outnumber
+    # missionaries on a bank that has missionaries on it.
+    m_left, c_left, m_right, c_right, boat = state
+
+    if m_left < 0 or c_left < 0 or m_right < 0 or c_right < 0:
         return False
-    if m_l > 0 and c_l > m_l:
+    if m_left > 0 and c_left > m_left:
         return False
-    if m_r > 0 and c_r > m_r:
+    if m_right > 0 and c_right > m_right:
         return False
     return True
 
 
-def successors(state):
-    m_l, c_l, m_r, c_r, boat = state
-    result = []
-    for (m, c) in MOVES:
+def get_successors(state):
+    # Returns a list of (move, new_state) for every legal move from this state.
+    m_left, c_left, m_right, c_right, boat = state
+    successors = []
+
+    for move in MOVES:
+        m, c = move
+
         if boat == 'L':
-            if m > m_l or c > c_l:
+            # Boat goes left to right, so those people leave the left bank.
+            if m > m_left or c > c_left:
                 continue
-            nxt = (m_l - m, c_l - c, m_r + m, c_r + c, 'R')
+            new_state = (m_left - m, c_left - c, m_right + m, c_right + c, 'R')
         else:
-            if m > m_r or c > c_r:
+            # Boat goes right to left.
+            if m > m_right or c > c_right:
                 continue
-            nxt = (m_l + m, c_l + c, m_r - m, c_r - c, 'L')
-        if is_valid(nxt):
-            result.append(((m, c), nxt))
-    return result
+            new_state = (m_left + m, c_left + c, m_right - m, c_right - c, 'L')
+
+        if is_safe(new_state):
+            successors.append((move, new_state))
+
+    return successors
 
 
 def is_goal(state):
+    # Everyone made it to the right bank.
     return state[0] == 0 and state[1] == 0
 
 
-def cost_model_a(action, state, next_state):
-    m, c = action
+def get_cost(move):
+    # Cost Model A: 2 per missionary, 1 per cannibal.
+    m, c = move
     return 2 * m + 1 * c
 
 
+# ---------- The three heuristics ----------
+
 def h1(state):
-    """Passenger weight remaining on the left bank."""
-    return 2 * state[0] + 1 * state[1]
+    # Weight of everyone still waiting on the left bank.
+    m_left = state[0]
+    c_left = state[1]
+    return 2 * m_left + 1 * c_left
 
 
 def h2(state):
-    """Trip-packing lower bound."""
-    return math.ceil((2 * state[0] + 1 * state[1]) / 3)
+    # Same weight, divided by 3 and rounded up.
+    m_left = state[0]
+    c_left = state[1]
+    return math.ceil((2 * m_left + 1 * c_left) / 3)
 
 
 def h3(state):
-    """Weight remaining plus the cost of the return trips it forces."""
-    m_l, c_l, _, _, boat = state
-    weight = 2 * m_l + 1 * c_l
-    people = m_l + c_l
+    # My own heuristic. h1 only pays to send people over once, but the boat
+    # can't row itself back. Every return trip needs someone in it, and that
+    # person has to be brought over again later, so that's 2 extra cost per
+    # return trip at minimum.
+    m_left, c_left, m_right, c_right, boat = state
+
+    weight = 2 * m_left + 1 * c_left
+    people = m_left + c_left
+
     if people == 0:
         return 0
+
+    # How many return trips are still needed, at minimum.
     if boat == 'L':
-        returns = max(0, math.ceil(people / 2) - 1)
+        trips_back = math.ceil(people / 2) - 1
+        if trips_back < 0:
+            trips_back = 0
     else:
-        returns = math.ceil(people / 2)
-    return weight + 2 * returns
+        trips_back = math.ceil(people / 2)
+
+    return weight + 2 * trips_back
 
 
-def a_star(start, heuristic, cost_fn=cost_model_a):
-    """Returns (path, actions, total_cost, expansions)."""
-    counter = 0
-    frontier = [(heuristic(start), 0, counter, start, [start], [])]
-    best_g = {start: 0}
+# ---------- A* search ----------
+
+def a_star(start, h):
+    # Fringe holds (f, g, state, path). heapq always pops the smallest f.
+    fringe = []
+    heapq.heappush(fringe, (h(start), 0, start, [start]))
+
     closed = set()
     expansions = 0
 
-    while frontier:
-        _, g, _, state, path, actions = heapq.heappop(frontier)
+    while len(fringe) > 0:
+        f, g, state, path = heapq.heappop(fringe)
 
+        # Skip it if we already expanded this state.
         if state in closed:
             continue
         closed.add(state)
 
+        # Stop when we DEQUEUE the goal, not when we enqueue it.
         if is_goal(state):
-            return path, actions, g, expansions
+            return path, g, expansions
 
-        expansions += 1
-        for action, nxt in successors(state):
-            new_g = g + cost_fn(action, state, nxt)
-            if nxt not in best_g or new_g < best_g[nxt]:
-                best_g[nxt] = new_g
-                counter += 1
-                heapq.heappush(
-                    frontier,
-                    (new_g + heuristic(nxt), new_g, counter,
-                     nxt, path + [nxt], actions + [action])
-                )
+        expansions = expansions + 1
 
-    return None, None, None, expansions
+        for move, new_state in get_successors(state):
+            if new_state not in closed:
+                new_g = g + get_cost(move)
+                new_f = new_g + h(new_state)
+                heapq.heappush(fringe, (new_f, new_g, new_state, path + [new_state]))
+
+    return None, 0, expansions
 
 
-def read_initial_state(filename="input.txt"):
-    with open(filename) as f:
-        for raw in f:
-            line = raw.strip()
-            if not line or line.startswith("#"):
-                continue
-            parts = [p.strip() for p in line.split(",")]
-            if len(parts) != 5:
-                raise ValueError("Expected 5 comma-separated fields, got: " + line)
-            m_l, c_l, m_r, c_r = (int(parts[i]) for i in range(4))
-            boat = parts[4].upper()
-            if boat not in ("L", "R"):
-                raise ValueError("Boat must be L or R, got: " + parts[4])
-            return (m_l, c_l, m_r, c_r, boat)
-    raise ValueError("input.txt contained no state line")
+# ---------- Input and output ----------
+
+def read_start_state():
+    # input.txt looks like: 3, 3, 0, 0, L
+    f = open("input.txt")
+    line = f.readline().strip()
+    f.close()
+
+    parts = line.split(",")
+    m_left = int(parts[0])
+    c_left = int(parts[1])
+    m_right = int(parts[2])
+    c_right = int(parts[3])
+    boat = parts[4].strip().upper()
+
+    return (m_left, c_left, m_right, c_right, boat)
 
 
-def format_path(path):
-    return " -> ".join("({},{},{},{},{})".format(*s) for s in path)
+def path_to_string(path):
+    pieces = []
+    for state in path:
+        pieces.append("(%d,%d,%d,%d,%s)" % state)
+    return " -> ".join(pieces)
 
 
-def report(label, result):
-    path, actions, cost, expansions = result
-    print("The solution of {} is:".format(label))
+def print_answer(name, path, cost, expansions):
+    print("The solution of " + name + " is:")
     if path is None:
         print("Solution Path: no solution found")
         print("Total cost = N/A")
     else:
-        print("Solution Path: " + format_path(path))
-        print("Total cost = {}".format(cost))
-    print("Number of node expansions = {}".format(expansions))
+        print("Solution Path: " + path_to_string(path))
+        print("Total cost = " + str(cost))
+    print("Number of node expansions = " + str(expansions))
 
 
 def main():
-    start = read_initial_state("input.txt")
+    start = read_start_state()
 
-    report("Q3.1 (Heuristic 1)", a_star(start, h1))
+    path, cost, expansions = a_star(start, h1)
+    print_answer("Q3.1 (Heuristic 1)", path, cost, expansions)
     print()
-    report("Q3.1 (Heuristic 2)", a_star(start, h2))
+
+    path, cost, expansions = a_star(start, h2)
+    print_answer("Q3.1 (Heuristic 2)", path, cost, expansions)
     print()
-    report("Q3.2 Part C (Heuristic 3)", a_star(start, h3))
+
+    path, cost, expansions = a_star(start, h3)
+    print_answer("Q3.2 Part C (Heuristic 3)", path, cost, expansions)
 
 
-if __name__ == "__main__":
-    main()
+main()
