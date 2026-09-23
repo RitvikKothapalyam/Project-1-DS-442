@@ -1,167 +1,198 @@
 # solution_q3.py
-# Question 3: A* Search with admissible heuristics
-# Run with: python solution_q3.py
+# DS 442 - Question 3: A* Search with Admissible Heuristics (Cost Model A)
 #
-# Uses Cost Model A: each missionary in the boat costs 2, each cannibal costs 1.
-# A* orders the fringe by f(n) = g(n) + h(n), like in lecture.
+# Run with:
+#   python solution_q3.py        -> runs heuristics 1, 2 and 3
+#   python solution_q3.py 2      -> runs only heuristic 2 (1, 2 or 3)
+#
+# How we set this up follows the Informed Search / A* slides:
+#   - Same search problem as Q1/Q2, using Cost Model A
+#     (2 per missionary + 1 per cannibal on the boat).
+#   - A* is the same GRAPH-SEARCH as before. The fringe is a priority
+#     queue ordered by f(n) = g(n) + h(n), where g(n) is the path cost so
+#     far (backward cost) and h(n) is the heuristic (forward cost).
+#   - The closed set is a Python set so no state gets expanded twice.
+#   - The goal test happens when a node is DEQUEUED, not when it's
+#     enqueued ("When should A* terminate?" slide).
+#   - A node expansion is counted every time a state gets added to the
+#     closed set and its successors are generated.
+#
+# Heuristics:
+#   h1(s) = 2*M_left + C_left
+#   h2(s) = ceil((2*M_left + C_left) / 3)
+#   h3(s) = h1(s) + 2 * (minimum number of return trips still needed)
+#     where, with N = M_left + C_left people still on the left:
+#       boat on L: at least max(0, N - 2) return trips
+#       boat on R: at least N return trips
+#     (see the writeup for why this is admissible)
 
+import sys
 import heapq
 import math
 
-# All the ways the boat can be loaded: (missionaries, cannibals)
+# All the ways the boat can be loaded: (missionaries, cannibals).
 # The boat holds 1 or 2 people.
 MOVES = [(0, 1), (0, 2), (1, 0), (1, 1), (2, 0)]
 
 
-def is_safe(state):
-    # A state is safe if nobody is negative and cannibals never outnumber
-    # missionaries on a bank that has missionaries on it.
-    m_left, c_left, m_right, c_right, boat = state
+class RiverCrossingProblem:
+    # State = (M_left, C_left, M_right, C_right, Boat)
 
-    if m_left < 0 or c_left < 0 or m_right < 0 or c_right < 0:
-        return False
-    if m_left > 0 and c_left > m_left:
-        return False
-    if m_right > 0 and c_right > m_right:
-        return False
-    return True
+    def __init__(self, start_state):
+        self.start_state = start_state
 
+    def get_start_state(self):
+        return self.start_state
 
-def get_successors(state):
-    # Returns a list of (move, new_state) for every legal move from this state.
-    m_left, c_left, m_right, c_right, boat = state
-    successors = []
+    def is_goal_state(self, state):
+        # Everyone is on the right bank
+        return state[0] == 0 and state[1] == 0
 
-    for move in MOVES:
+    def is_valid(self, state):
+        m_left, c_left, m_right, c_right, boat = state
+
+        # nobody can be negative
+        if m_left < 0 or c_left < 0 or m_right < 0 or c_right < 0:
+            return False
+        # check BOTH banks, not just the one the boat left
+        if m_left > 0 and c_left > m_left:
+            return False
+        if m_right > 0 and c_right > m_right:
+            return False
+        return True
+
+    def step_cost(self, move):
+        # Cost Model A: missionaries are twice as costly to carry
         m, c = move
+        return 2 * m + 1 * c
 
-        if boat == 'L':
-            # Boat goes left to right, so those people leave the left bank.
-            if m > m_left or c > c_left:
-                continue
-            new_state = (m_left - m, c_left - c, m_right + m, c_right + c, 'R')
-        else:
-            # Boat goes right to left.
-            if m > m_right or c > c_right:
-                continue
-            new_state = (m_left + m, c_left + c, m_right - m, c_right - c, 'L')
+    def get_successors(self, state):
+        # returns a list of (next_state, action, step_cost)
+        m_left, c_left, m_right, c_right, boat = state
+        successors = []
 
-        if is_safe(new_state):
-            successors.append((move, new_state))
+        for m, c in MOVES:
+            if boat == 'L':
+                # boat goes left -> right
+                next_state = (m_left - m, c_left - c, m_right + m, c_right + c, 'R')
+            else:
+                # boat goes right -> left
+                next_state = (m_left + m, c_left + c, m_right - m, c_right - c, 'L')
 
-    return successors
+            if self.is_valid(next_state):
+                successors.append((next_state, (m, c), self.step_cost((m, c))))
 
-
-def is_goal(state):
-    # Everyone made it to the right bank.
-    return state[0] == 0 and state[1] == 0
+        return successors
 
 
-def get_cost(move):
-    # Cost Model A: 2 per missionary, 1 per cannibal.
-    m, c = move
-    return 2 * m + 1 * c
+# Heuristics
+
+def heuristic_1(state):
+    # Passenger weight remaining: everyone on the left still has to be
+    # carried across at least once
+    m_left, c_left = state[0], state[1]
+    return 2 * m_left + c_left
 
 
-# ---------- The three heuristics ----------
-
-def h1(state):
-    # Weight of everyone still waiting on the left bank.
-    m_left = state[0]
-    c_left = state[1]
-    return 2 * m_left + 1 * c_left
+def heuristic_2(state):
+    # Trip-packing lower bound
+    m_left, c_left = state[0], state[1]
+    return math.ceil((2 * m_left + c_left) / 3)
 
 
-def h2(state):
-    # Same weight, divided by 3 and rounded up.
-    m_left = state[0]
-    c_left = state[1]
-    return math.ceil((2 * m_left + 1 * c_left) / 3)
-
-
-def h3(state):
-    # My own heuristic. h1 only pays to send people over once, but the boat
-    # can't row itself back. Every return trip needs someone in it, and that
-    # person has to be brought over again later, so that's 2 extra cost per
-    # return trip at minimum.
+def heuristic_3(state):
+    # h1 plus the cost of the return trips we know we still have to make.
+    # Every return trip carries at least 1 person (cost >= 1), and whoever
+    # comes back has to be carried across again (cost >= 1 more).
+    # So each required return trip adds at least 2 on top of h1.
     m_left, c_left, m_right, c_right, boat = state
+    people_left = m_left + c_left
 
-    weight = 2 * m_left + 1 * c_left
-    people = m_left + c_left
-
-    if people == 0:
-        return 0
-
-    # How many return trips are still needed, at minimum.
     if boat == 'L':
-        trips_back = math.ceil(people / 2) - 1
-        if trips_back < 0:
-            trips_back = 0
+        returns_needed = max(0, people_left - 2)
     else:
-        trips_back = math.ceil(people / 2)
+        returns_needed = people_left
 
-    return weight + 2 * trips_back
+    return heuristic_1(state) + 2 * returns_needed
 
 
-# ---------- A* search ----------
+HEURISTICS = {1: heuristic_1, 2: heuristic_2, 3: heuristic_3}
 
-def a_star(start, h):
-    # Fringe holds (f, g, state, path). heapq always pops the smallest f.
-    fringe = []
-    heapq.heappush(fringe, (h(start), 0, start, [start]))
 
+# Fringe data structure
+
+class PriorityQueue:
+    # Pops the item with the lowest priority first.
+    # The counter breaks ties so equal-priority nodes come out in the
+    # order they were added.
+    def __init__(self):
+        self.heap = []
+        self.count = 0
+
+    def push(self, item, priority):
+        heapq.heappush(self.heap, (priority, self.count, item))
+        self.count += 1
+
+    def pop(self):
+        priority, count, item = heapq.heappop(self.heap)
+        return item
+
+    def is_empty(self):
+        return len(self.heap) == 0
+
+
+# Search
+
+def a_star_search(problem, heuristic):
+    # GRAPH-SEARCH from the slides, with priority f(n) = g(n) + h(n):
+    #   closed <- empty set
+    #   put start node in fringe
+    #   loop: pop lowest-f node, goal test, if state not in closed -> add to closed and expand
+    #
+    # Each node on the fringe is (state, path of states, total cost g)
     closed = set()
     expansions = 0
+    fringe = PriorityQueue()
 
-    while len(fringe) > 0:
-        f, g, state, path = heapq.heappop(fringe)
+    start = problem.get_start_state()
+    fringe.push((start, [start], 0), 0 + heuristic(start))
 
-        # Skip it if we already expanded this state.
-        if state in closed:
-            continue
-        closed.add(state)
+    while True:
+        if fringe.is_empty():
+            return None, None, expansions    # failure
 
-        # Stop when we DEQUEUE the goal, not when we enqueue it.
-        if is_goal(state):
-            return path, g, expansions
+        state, path, cost = fringe.pop()
 
-        expansions = expansions + 1
+        if problem.is_goal_state(state):
+            return path, cost, expansions
 
-        for move, new_state in get_successors(state):
-            if new_state not in closed:
-                new_g = g + get_cost(move)
-                new_f = new_g + h(new_state)
-                heapq.heappush(fringe, (new_f, new_g, new_state, path + [new_state]))
+        if state not in closed:
+            closed.add(state)
+            expansions += 1
 
-    return None, 0, expansions
+            for next_state, action, step_cost in problem.get_successors(state):
+                g = cost + step_cost
+                f = g + heuristic(next_state)
+                fringe.push((next_state, path + [next_state], g), f)
 
 
-# ---------- Input and output ----------
+# Input / Output
 
-def read_start_state():
+def read_start_state(filename):
     # input.txt looks like: 3, 3, 0, 0, L
-    f = open("input.txt")
+    f = open(filename)
     line = f.readline().strip()
     f.close()
 
-    parts = line.split(",")
-    m_left = int(parts[0])
-    c_left = int(parts[1])
-    m_right = int(parts[2])
-    c_right = int(parts[3])
-    boat = parts[4].strip().upper()
-
-    return (m_left, c_left, m_right, c_right, boat)
+    parts = [p.strip() for p in line.split(",")]
+    return (int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3]), parts[4].upper())
 
 
 def path_to_string(path):
-    pieces = []
-    for state in path:
-        pieces.append("(%d,%d,%d,%d,%s)" % state)
-    return " -> ".join(pieces)
+    return " -> ".join("(%d,%d,%d,%d,%s)" % s for s in path)
 
 
-def print_answer(name, path, cost, expansions):
+def print_solution(name, path, cost, expansions):
     print("The solution of " + name + " is:")
     if path is None:
         print("Solution Path: no solution found")
@@ -173,18 +204,24 @@ def print_answer(name, path, cost, expansions):
 
 
 def main():
-    start = read_start_state()
+    problem = RiverCrossingProblem(read_start_state("input.txt"))
 
-    path, cost, expansions = a_star(start, h1)
-    print_answer("Q3.1 (Heuristic 1)", path, cost, expansions)
-    print()
+    # pick the heuristic from the command line, otherwise run all three
+    if len(sys.argv) > 1:
+        if sys.argv[1] not in ('1', '2', '3'):
+            print("Heuristic must be 1, 2 or 3")
+            return
+        choices = [int(sys.argv[1])]
+    else:
+        choices = [1, 2, 3]
 
-    path, cost, expansions = a_star(start, h2)
-    print_answer("Q3.1 (Heuristic 2)", path, cost, expansions)
-    print()
+    for i in range(len(choices)):
+        h = choices[i]
+        path, cost, expansions = a_star_search(problem, HEURISTICS[h])
+        print_solution("Q3.1 (Heuristic " + str(h) + ")", path, cost, expansions)
+        if i < len(choices) - 1:
+            print()
 
-    path, cost, expansions = a_star(start, h3)
-    print_answer("Q3.2 Part C (Heuristic 3)", path, cost, expansions)
 
-
-main()
+if __name__ == "__main__":
+    main()
